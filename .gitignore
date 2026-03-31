@@ -1,0 +1,27 @@
+# Binaries and build artifacts
+backend/server
+backend/*.exe
+
+# Go test artifacts
+*.test
+*.out
+
+# Node.js
+frontend/node_modules/
+frontend/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.env
+
+# Logs
+*.log

@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: log-analysis-backend
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - MYSQL_DSN=root:password@tcp(mysql:3306)/log_analysis?charset=utf8mb4&parseTime=True&loc=Local
+      - LOKI_URL=http://172.26.240.15:3100
+      - DINGTALK_WEBHOOK=https://oapi.dingtalk.com/robot/send?access_token=your_token_here
+      - SERVER_PORT=8080
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - log-analysis-net
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: log-analysis-frontend
+    restart: unless-stopped
+    ports:
+      - "8088:80"
+    depends_on:
+      - backend
+    networks:
+      - log-analysis-net
+
+  mysql:
+    image: mysql:8.0
+    container_name: log-analysis-mysql
+    restart: unless-stopped
+    environment:
+      - MYSQL_ROOT_PASSWORD=password
+      - MYSQL_DATABASE=log_analysis
+      - MYSQL_CHARSET=utf8mb4
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./backend/migration/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "13306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-ppassword"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - log-analysis-net
+
+volumes:
+  mysql_data:
+    driver: local
+
+networks:
+  log-analysis-net:
+    driver: bridge

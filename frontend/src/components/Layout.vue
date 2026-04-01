@@ -35,6 +35,10 @@
           <el-icon><Clock /></el-icon>
           <template #title>告警历史</template>
         </el-menu-item>
+        <el-menu-item index="/notify-channels">
+          <el-icon><BellFilled /></el-icon>
+          <template #title>通知渠道</template>
+        </el-menu-item>
         <el-menu-item index="/settings">
           <el-icon><Setting /></el-icon>
           <template #title>系统设置</template>

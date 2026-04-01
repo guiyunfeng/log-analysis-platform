@@ -32,6 +32,7 @@ func main() {
 		&model.AlertRule{},
 		&model.AlertHistory{},
 		&model.Setting{},
+		&model.NotifyChannel{},
 	); err != nil {
 		log.Fatalf("Failed to migrate database: %v", err)
 	}
@@ -41,7 +42,7 @@ func main() {
 
 	// Initialize services
 	service.InitLoki()
-	service.InitDingTalk()
+	service.InitNotifyService(db)
 	service.InitAnalyzer(db)
 	service.InitAlerter(db)
 
@@ -92,6 +93,14 @@ func main() {
 		// Settings
 		api.GET("/settings", handler.GetSettings)
 		api.PUT("/settings", handler.UpdateSettings)
+
+		// Notify channels
+		api.GET("/notify-channels", handler.ListNotifyChannels)
+		api.POST("/notify-channels", handler.CreateNotifyChannel)
+		api.PUT("/notify-channels/:id", handler.UpdateNotifyChannel)
+		api.DELETE("/notify-channels/:id", handler.DeleteNotifyChannel)
+		api.PUT("/notify-channels/:id/toggle", handler.ToggleNotifyChannel)
+		api.POST("/notify-channels/:id/test", handler.TestNotifyChannel)
 	}
 
 	log.Printf("Server starting on :%s", config.GlobalConfig.ServerPort)

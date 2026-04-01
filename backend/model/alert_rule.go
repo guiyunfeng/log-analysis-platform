@@ -16,6 +16,16 @@ type AlertRule struct {
 	Threshold      int       `json:"threshold" gorm:"not null;default:1"`
 	SilenceMinutes int       `json:"silence_minutes" gorm:"not null;default:30"`
 	Enabled        bool      `json:"enabled" gorm:"not null;default:true"`
+	// Extended fields
+	Labels         string    `json:"labels" gorm:"size:500;default:''"`
+	Description    string    `json:"description" gorm:"type:text"`
+	EffectiveStart string    `json:"effective_start" gorm:"size:10;default:''"`  // e.g. "08:00"
+	EffectiveEnd   string    `json:"effective_end" gorm:"size:10;default:''"`    // e.g. "22:00"
+	EffectiveDays  string    `json:"effective_days" gorm:"size:20;default:''"`   // e.g. "1,2,3,4,5"
+	NotifyChannels string    `json:"notify_channels" gorm:"size:500;default:''"` // comma-separated channel IDs
+	NotifyRecovery bool      `json:"notify_recovery" gorm:"not null;default:false"`
+	RecoveryWindow int       `json:"recovery_window" gorm:"not null;default:600"` // seconds
+	MaxAlertCount  int       `json:"max_alert_count" gorm:"not null;default:0"`   // 0 = unlimited
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }

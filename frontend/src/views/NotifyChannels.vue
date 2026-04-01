@@ -58,6 +58,7 @@
             <el-option label="邮箱 (Email)" value="email" />
             <el-option label="Telegram" value="telegram" />
             <el-option label="飞书 (Feishu)" value="feishu" />
+            <el-option label="📞 电话告警 (Phone)" value="phone" />
           </el-select>
         </el-form-item>
         <el-form-item label="启用">
@@ -69,8 +70,24 @@
           <el-form-item label="Webhook URL" required>
             <el-input v-model="form.config.webhook" placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxx" />
           </el-form-item>
-          <el-form-item label="关键字">
-            <el-input v-model="form.config.keyword" placeholder="告警" />
+          <el-form-item label="安全类型">
+            <el-select v-model="form.config.security_type" style="width: 100%">
+              <el-option label="关键词" value="keyword" />
+              <el-option label="加签 (HMAC-SHA256)" value="sign" />
+              <el-option label="IP 白名单" value="ip_whitelist" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="加签密钥" v-if="form.config.security_type === 'sign'">
+            <el-input v-model="form.config.sign_secret" type="password" show-password placeholder="SEC开头的密钥" />
+          </el-form-item>
+          <el-form-item label="关键词" v-if="form.config.security_type === 'keyword'">
+            <el-input v-model="dingKeywordsStr" placeholder="多个关键词逗号分隔，如: 告警,故障,异常" />
+          </el-form-item>
+          <el-form-item label="@手机号">
+            <el-input v-model="dingAtMobilesStr" placeholder="多个手机号逗号分隔（可选）" />
+          </el-form-item>
+          <el-form-item label="@所有人">
+            <el-switch v-model="form.config.at_all" />
           </el-form-item>
         </template>
 
@@ -125,6 +142,40 @@
             <el-input v-model="form.config.webhook" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxx" />
           </el-form-item>
         </template>
+
+        <!-- Phone config -->
+        <template v-if="form.type === 'phone'">
+          <el-form-item label="云服务商" required>
+            <el-select v-model="form.config.provider" style="width: 100%">
+              <el-option label="阿里云" value="aliyun" />
+              <el-option label="腾讯云" value="tencent" />
+              <el-option label="自定义 Webhook" value="webhook" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="AccessKeyID" v-if="form.config.provider !== 'webhook'">
+            <el-input v-model="form.config.access_key_id" placeholder="AccessKeyID" />
+          </el-form-item>
+          <el-form-item label="SecretKey" v-if="form.config.provider !== 'webhook'">
+            <el-input v-model="form.config.secret_key" type="password" show-password placeholder="SecretKey" />
+          </el-form-item>
+          <el-form-item label="TTS 模板ID" v-if="form.config.provider !== 'webhook'">
+            <el-input v-model="form.config.template_id" placeholder="语音通知模板ID" />
+          </el-form-item>
+          <el-form-item label="显示号码" v-if="form.config.provider !== 'webhook'">
+            <el-input v-model="form.config.called_show_number" placeholder="主叫显示号码" />
+          </el-form-item>
+          <el-form-item label="Webhook URL" v-if="form.config.provider === 'webhook'">
+            <el-input v-model="form.config.webhook_url" placeholder="https://your-gateway/voice-alert" />
+          </el-form-item>
+          <el-form-item label="被叫号码" required>
+            <el-input
+              v-model="phoneNumbersStr"
+              type="textarea"
+              :rows="3"
+              placeholder="每行一个手机号"
+            />
+          </el-form-item>
+        </template>
       </el-form>
 
       <template #footer>
@@ -154,21 +205,26 @@ const testingId = ref(null)
 const dialogVisible = ref(false)
 const channels = ref([])
 const emailToStr = ref('')
+const phoneNumbersStr = ref('')
+const dingKeywordsStr = ref('')
+const dingAtMobilesStr = ref('')
 
 const typeTagMap = {
   dingtalk: { label: '钉钉', tag: 'primary' },
   wecom:    { label: '企业微信', tag: 'success' },
   email:    { label: '邮箱', tag: 'warning' },
   telegram: { label: 'Telegram', tag: 'info' },
-  feishu:   { label: '飞书', tag: 'danger' }
+  feishu:   { label: '飞书', tag: 'danger' },
+  phone:    { label: '电话告警', tag: '' }
 }
 
 const defaultConfig = {
-  dingtalk: { webhook: '', keyword: '告警' },
+  dingtalk: { webhook: '', security_type: 'keyword', sign_secret: '', keywords: [], keyword: '', at_mobiles: [], at_all: false },
   wecom:    { webhook: '' },
   email:    { smtp_host: '', smtp_port: 465, username: '', password: '', from: '', to: [], use_tls: true },
   telegram: { bot_token: '', chat_id: '' },
-  feishu:   { webhook: '' }
+  feishu:   { webhook: '' },
+  phone:    { provider: 'webhook', access_key_id: '', secret_key: '', template_id: '', called_show_number: '', phone_numbers: [], webhook_url: '' }
 }
 
 const form = reactive({
@@ -194,6 +250,9 @@ const loadChannels = async () => {
 const onTypeChange = () => {
   form.config = { ...(defaultConfig[form.type] || {}) }
   emailToStr.value = ''
+  phoneNumbersStr.value = ''
+  dingKeywordsStr.value = ''
+  dingAtMobilesStr.value = ''
 }
 
 const openDialog = (row) => {
@@ -207,6 +266,13 @@ const openDialog = (row) => {
       form.config = { ...(defaultConfig[row.type] || {}), ...parsed }
       if (row.type === 'email' && Array.isArray(form.config.to)) {
         emailToStr.value = form.config.to.join(', ')
+      }
+      if (row.type === 'phone' && Array.isArray(form.config.phone_numbers)) {
+        phoneNumbersStr.value = form.config.phone_numbers.join('\n')
+      }
+      if (row.type === 'dingtalk') {
+        dingKeywordsStr.value = Array.isArray(form.config.keywords) ? form.config.keywords.join(',') : (form.config.keyword || '')
+        dingAtMobilesStr.value = Array.isArray(form.config.at_mobiles) ? form.config.at_mobiles.join(',') : ''
       }
     } catch {
       form.config = { ...(defaultConfig[row.type] || {}) }
@@ -224,6 +290,9 @@ const resetForm = () => {
   form.config = { ...defaultConfig.dingtalk }
   form.enabled = true
   emailToStr.value = ''
+  phoneNumbersStr.value = ''
+  dingKeywordsStr.value = ''
+  dingAtMobilesStr.value = ''
 }
 
 const saveChannel = async () => {
@@ -233,6 +302,13 @@ const saveChannel = async () => {
   }
   if (form.type === 'email') {
     form.config.to = emailToStr.value.split(',').map(s => s.trim()).filter(Boolean)
+  }
+  if (form.type === 'phone') {
+    form.config.phone_numbers = phoneNumbersStr.value.split('\n').map(s => s.trim()).filter(Boolean)
+  }
+  if (form.type === 'dingtalk') {
+    form.config.keywords = dingKeywordsStr.value.split(',').map(s => s.trim()).filter(Boolean)
+    form.config.at_mobiles = dingAtMobilesStr.value.split(',').map(s => s.trim()).filter(Boolean)
   }
   const payload = {
     name: form.name,

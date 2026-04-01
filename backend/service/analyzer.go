@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"log-analysis-platform/model"
@@ -26,6 +27,49 @@ func InitAnalyzer(db *gorm.DB) {
 		loki:   DefaultLokiService,
 		notify: DefaultNotifyService,
 	}
+}
+
+// isRuleEffective checks whether a rule should be evaluated at the given time
+// based on EffectiveDays and EffectiveStart/EffectiveEnd.
+func (a *AnalyzerService) isRuleEffective(rule model.AlertRule, now time.Time) bool {
+	// Check effective weekdays (1=Monday … 7=Sunday, matching ISO 8601)
+	if rule.EffectiveDays != "" {
+		weekday := int(now.Weekday()) // 0=Sunday
+		// Convert Go weekday (0=Sunday) to ISO (1=Monday … 7=Sunday)
+		isoDay := weekday
+		if isoDay == 0 {
+			isoDay = 7
+		}
+		found := false
+		for _, part := range strings.Split(rule.EffectiveDays, ",") {
+			part = strings.TrimSpace(part)
+			if d, err := strconv.Atoi(part); err == nil && d == isoDay {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+
+	// Check effective time range (HH:mm format)
+	if rule.EffectiveStart != "" && rule.EffectiveEnd != "" {
+		currentTime := now.Format("15:04")
+		if rule.EffectiveStart <= rule.EffectiveEnd {
+			// Same-day range, e.g. "08:00" – "22:00"
+			if currentTime < rule.EffectiveStart || currentTime > rule.EffectiveEnd {
+				return false
+			}
+		} else {
+			// Overnight range, e.g. "22:00" – "06:00"
+			if currentTime < rule.EffectiveStart && currentTime > rule.EffectiveEnd {
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 // RunAnalysis is called periodically to check all alert rules
@@ -60,6 +104,24 @@ func (a *AnalyzerService) RunAnalysis() {
 	var warningAlerts []model.AlertHistory
 
 	for _, rule := range rules {
+		// Check effective time window
+		if !a.isRuleEffective(rule, now) {
+			continue
+		}
+
+		// Check MaxAlertCount: if > 0, count today's alerts for this rule
+		if rule.MaxAlertCount > 0 {
+			todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+			var todayCount int64
+			a.db.Model(&model.AlertHistory{}).
+				Where("rule_id = ? AND created_at >= ?", rule.ID, todayStart).
+				Count(&todayCount)
+			if int(todayCount) >= rule.MaxAlertCount {
+				log.Printf("Rule %d reached max alert count (%d), skipping", rule.ID, rule.MaxAlertCount)
+				continue
+			}
+		}
+
 		start := now.Add(-time.Duration(rule.TimeWindow) * time.Second)
 		count, sample, err := a.loki.CountErrors(rule.Project, rule.Service, "", rule.CallerFile, rule.ContentPattern, start, now)
 		if err != nil {
@@ -68,6 +130,10 @@ func (a *AnalyzerService) RunAnalysis() {
 		}
 
 		if count <= int64(rule.Threshold) {
+			// Check recovery: if NotifyRecovery is enabled, see if we should send recovery notice
+			if rule.NotifyRecovery {
+				a.checkRecovery(rule, now)
+			}
 			continue
 		}
 
@@ -89,6 +155,7 @@ func (a *AnalyzerService) RunAnalysis() {
 			ErrorCount:    int(count),
 			SampleContent: sample,
 			Comparison:    comparison,
+			Labels:        rule.Labels,
 		}
 
 		if err := a.db.Create(&hist).Error; err != nil {
@@ -108,7 +175,7 @@ func (a *AnalyzerService) RunAnalysis() {
 
 	// Send critical alerts immediately
 	for _, alert := range criticalAlerts {
-		a.notify.SendAlert(AlertMessage{
+		msg := AlertMessage{
 			Severity:      alert.Severity,
 			Project:       alert.Project,
 			Service:       alert.Service,
@@ -118,7 +185,18 @@ func (a *AnalyzerService) RunAnalysis() {
 			Comparison:    alert.Comparison,
 			SampleContent: alert.SampleContent,
 			AlertTime:     now,
-		})
+		}
+		// Use per-rule notify channels if configured
+		if alert.RuleID != nil {
+			var rule model.AlertRule
+			if err := a.db.First(&rule, *alert.RuleID).Error; err == nil && rule.NotifyChannels != "" {
+				a.notify.SendAlertToChannels(rule.NotifyChannels, msg)
+			} else {
+				a.notify.SendAlert(msg)
+			}
+		} else {
+			a.notify.SendAlert(msg)
+		}
 		a.db.Model(&alert).Update("notified", true)
 	}
 
@@ -143,6 +221,52 @@ func (a *AnalyzerService) RunAnalysis() {
 	}
 
 	log.Printf("Analysis done: %d critical, %d warning alerts generated", len(criticalAlerts), len(warningAlerts))
+}
+
+// checkRecovery sends a recovery notification if the rule had previous unrecovered alerts
+// and the error count is now below the threshold (within RecoveryWindow seconds).
+func (a *AnalyzerService) checkRecovery(rule model.AlertRule, now time.Time) {
+	window := rule.RecoveryWindow
+	if window <= 0 {
+		window = 600
+	}
+	since := now.Add(-time.Duration(window) * time.Second)
+
+	// Find unrecovered, un-notified-for-recovery alerts within the recovery window
+	var unrecovered []model.AlertHistory
+	a.db.Where(
+		"rule_id = ? AND resolved = ? AND recovery_notified = ? AND created_at > ?",
+		rule.ID, false, false, since,
+	).Find(&unrecovered)
+
+	if len(unrecovered) == 0 {
+		return
+	}
+
+	// Mark them as recovered and send a recovery message
+	for i := range unrecovered {
+		resolvedAt := now
+		a.db.Model(&unrecovered[i]).Updates(map[string]interface{}{
+			"resolved":          true,
+			"resolved_at":       resolvedAt,
+			"recovery_notified": true,
+		})
+	}
+
+	recoveryMsg := AlertMessage{
+		Severity:   "warning",
+		Project:    rule.Project,
+		Service:    rule.Service,
+		CallerFile: rule.CallerFile,
+		AlertTime:  now,
+	}
+
+	// Use rule-specific channels for recovery notification too
+	if rule.NotifyChannels != "" {
+		a.notify.SendAlertToChannels(rule.NotifyChannels, recoveryMsg)
+	} else {
+		a.notify.SendRecovery(recoveryMsg)
+	}
 }
 
 func (a *AnalyzerService) runSpikeDetection(now time.Time, multiplier float64, criticals, warnings *[]model.AlertHistory) {
@@ -253,3 +377,4 @@ func (a *AnalyzerService) loadSettings() map[string]string {
 	}
 	return result
 }
+

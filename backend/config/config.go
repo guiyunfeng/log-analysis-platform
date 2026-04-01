@@ -6,20 +6,24 @@ import (
 )
 
 type Config struct {
-	MySQLDSN         string
-	LokiURL          string
-	DingTalkWebhook  string
-	ServerPort       string
+	MySQLDSN          string
+	LokiURL           string
+	DingTalkWebhook   string
+	DingTalkSecret    string
+	DingTalkKeywords  string
+	ServerPort        string
 }
 
 var GlobalConfig Config
 
 func Load() {
 	GlobalConfig = Config{
-		MySQLDSN:        getEnv("MYSQL_DSN", "root:password@tcp(127.0.0.1:3306)/log_analysis?charset=utf8mb4&parseTime=True&loc=Local"),
-		LokiURL:         getEnv("LOKI_URL", "http://localhost:3100"),
-		DingTalkWebhook: getEnv("DINGTALK_WEBHOOK", ""),
-		ServerPort:      getEnv("SERVER_PORT", "8080"),
+		MySQLDSN:         getEnv("MYSQL_DSN", "root:password@tcp(127.0.0.1:3306)/log_analysis?charset=utf8mb4&parseTime=True&loc=Local"),
+		LokiURL:          getEnv("LOKI_URL", "http://localhost:3100"),
+		DingTalkWebhook:  getEnv("DINGTALK_WEBHOOK", ""),
+		DingTalkSecret:   getEnv("DINGTALK_SECRET", ""),
+		DingTalkKeywords: getEnv("DINGTALK_KEYWORDS", ""),
+		ServerPort:       getEnv("SERVER_PORT", "8080"),
 	}
 	log.Printf("Config loaded: LokiURL=%s, ServerPort=%s", GlobalConfig.LokiURL, GlobalConfig.ServerPort)
 }

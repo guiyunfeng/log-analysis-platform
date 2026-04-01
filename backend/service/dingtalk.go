@@ -2,19 +2,28 @@ package service
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
 
 // DingTalkConfig holds DingTalk channel configuration
 type DingTalkConfig struct {
-	Webhook string `json:"webhook"`
-	Keyword string `json:"keyword"`
+	Webhook      string   `json:"webhook"`
+	Keyword      string   `json:"keyword"`       // legacy single keyword
+	Keywords     []string `json:"keywords"`      // multiple keywords
+	SecurityType string   `json:"security_type"` // "keyword", "sign", "ip_whitelist"
+	SignSecret   string   `json:"sign_secret"`   // HMAC-SHA256 secret for "sign" mode
+	AtMobiles    []string `json:"at_mobiles"`    // phone numbers to @ in messages
+	AtAll        bool     `json:"at_all"`
 }
 
 // DingTalkMessage represents a DingTalk webhook message
@@ -30,25 +39,107 @@ type DingTalkMarkdown struct {
 }
 
 type DingTalkAt struct {
-	AtAll bool `json:"isAtAll"`
+	AtMobiles []string `json:"atMobiles,omitempty"`
+	AtAll     bool     `json:"isAtAll"`
 }
 
 // DingTalkNotifier implements Notifier for DingTalk
 type DingTalkNotifier struct {
-	webhookURL string
-	client     *http.Client
+	cfg    DingTalkConfig
+	client *http.Client
 }
 
 func NewDingTalkNotifier(webhook string) *DingTalkNotifier {
 	return &DingTalkNotifier{
-		webhookURL: webhook,
-		client:     &http.Client{Timeout: 10 * time.Second},
+		cfg:    DingTalkConfig{Webhook: webhook},
+		client: &http.Client{Timeout: 10 * time.Second},
 	}
+}
+
+// NewDingTalkNotifierWithConfig creates a notifier from a full config
+func NewDingTalkNotifierWithConfig(cfg DingTalkConfig) *DingTalkNotifier {
+	return &DingTalkNotifier{
+		cfg:    cfg,
+		client: &http.Client{Timeout: 10 * time.Second},
+	}
+}
+
+// sign generates the timestamp and signature for DingTalk "sign" security mode.
+func (n *DingTalkNotifier) sign() (timestamp string, sig string) {
+	ts := time.Now().UnixMilli()
+	timestamp = fmt.Sprintf("%d", ts)
+	stringToSign := fmt.Sprintf("%s\n%s", timestamp, n.cfg.SignSecret)
+	h := hmac.New(sha256.New, []byte(n.cfg.SignSecret))
+	h.Write([]byte(stringToSign))
+	sig = url.QueryEscape(base64.StdEncoding.EncodeToString(h.Sum(nil)))
+	return
+}
+
+// buildURL returns the webhook URL, appending sign parameters when needed.
+func (n *DingTalkNotifier) buildURL() string {
+	if n.cfg.SecurityType != "sign" || n.cfg.SignSecret == "" {
+		return n.cfg.Webhook
+	}
+	timestamp, sig := n.sign()
+	return fmt.Sprintf("%s&timestamp=%s&sign=%s", n.cfg.Webhook, timestamp, sig)
+}
+
+// ensureKeyword makes sure the message text contains at least one required keyword.
+func (n *DingTalkNotifier) ensureKeyword(text string) string {
+	if n.cfg.SecurityType != "keyword" {
+		return text
+	}
+	// Collect all configured keywords
+	keywords := n.cfg.Keywords
+	if len(keywords) == 0 && n.cfg.Keyword != "" {
+		keywords = []string{n.cfg.Keyword}
+	}
+	if len(keywords) == 0 {
+		return text
+	}
+	// If text already contains a keyword, return as-is
+	for _, kw := range keywords {
+		if kw != "" && strings.Contains(text, kw) {
+			return text
+		}
+	}
+	// Prepend the first keyword
+	return keywords[0] + " " + text
+}
+
+// buildAt constructs an @mention object from config.
+func (n *DingTalkNotifier) buildAt() *DingTalkAt {
+	if len(n.cfg.AtMobiles) == 0 && !n.cfg.AtAll {
+		return nil
+	}
+	return &DingTalkAt{
+		AtMobiles: n.cfg.AtMobiles,
+		AtAll:     n.cfg.AtAll,
+	}
+}
+
+// post sends a DingTalkMessage to the webhook.
+func (n *DingTalkNotifier) post(msg DingTalkMessage) error {
+	body, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal message: %w", err)
+	}
+	resp, err := n.client.Post(n.buildURL(), "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("send request: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	log.Printf("DingTalk response: %s", string(respBody))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("dingtalk API error: status=%d body=%s", resp.StatusCode, string(respBody))
+	}
+	return nil
 }
 
 // SendAlert sends an alert notification to DingTalk
 func (n *DingTalkNotifier) SendAlert(alert AlertMessage) error {
-	if n.webhookURL == "" {
+	if n.cfg.Webhook == "" {
 		log.Println("DingTalk webhook not configured, skipping notification")
 		return nil
 	}
@@ -97,38 +188,23 @@ func (n *DingTalkNotifier) SendAlert(alert AlertMessage) error {
 		alert.AlertTime.Format("2006-01-02 15:04:05"),
 	)
 
+	text = n.ensureKeyword(text)
+
 	msg := DingTalkMessage{
 		MsgType: "markdown",
 		Markdown: DingTalkMarkdown{
 			Title: title,
 			Text:  text,
 		},
+		At: n.buildAt(),
 	}
 
-	body, err := json.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("marshal message: %w", err)
-	}
-
-	resp, err := n.client.Post(n.webhookURL, "application/json", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-	log.Printf("DingTalk response: %s", string(respBody))
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("dingtalk API error: status=%d body=%s", resp.StatusCode, string(respBody))
-	}
-
-	return nil
+	return n.post(msg)
 }
 
 // SendBatchWarnings sends a batch of warnings to DingTalk with full details
 func (n *DingTalkNotifier) SendBatchWarnings(items []BatchWarningItem, alertTime time.Time) error {
-	if n.webhookURL == "" || len(items) == 0 {
+	if n.cfg.Webhook == "" || len(items) == 0 {
 		return nil
 	}
 
@@ -166,26 +242,17 @@ func (n *DingTalkNotifier) SendBatchWarnings(items []BatchWarningItem, alertTime
 		sb.WriteString("  \n")
 	}
 
+	text := n.ensureKeyword(sb.String())
+
 	msg := DingTalkMessage{
 		MsgType: "markdown",
 		Markdown: DingTalkMarkdown{
 			Title: title,
-			Text:  sb.String(),
+			Text:  text,
 		},
+		At: n.buildAt(),
 	}
 
-	body, err := json.Marshal(msg)
-	if err != nil {
-		return err
-	}
-
-	resp, err := n.client.Post(n.webhookURL, "application/json", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-	log.Printf("DingTalk batch response: %s", string(respBody))
-	return nil
+	return n.post(msg)
 }
+

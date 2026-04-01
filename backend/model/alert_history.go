@@ -17,8 +17,10 @@ type AlertHistory struct {
 	Comparison    string     `json:"comparison" gorm:"size:100;default:''"`
 	Resolved      bool       `json:"resolved" gorm:"not null;default:false"`
 	ResolvedAt    *time.Time `json:"resolved_at" gorm:"default:null"`
-	Notified      bool       `json:"notified" gorm:"not null;default:false"`
-	CreatedAt     time.Time  `json:"created_at"`
+	Notified          bool       `json:"notified" gorm:"not null;default:false"`
+	Labels            string     `json:"labels" gorm:"size:500;default:''"` // 继承规则标签
+	RecoveryNotified  bool       `json:"recovery_notified" gorm:"not null;default:false"` // 是否已发送恢复通知
+	CreatedAt         time.Time  `json:"created_at"`
 }
 
 func (AlertHistory) TableName() string {

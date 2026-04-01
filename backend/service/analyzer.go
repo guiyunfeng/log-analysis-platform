@@ -13,18 +13,18 @@ import (
 
 // AnalyzerService handles anomaly detection and alert evaluation
 type AnalyzerService struct {
-	db   *gorm.DB
-	loki *LokiService
-	dt   *DingTalkService
+	db     *gorm.DB
+	loki   *LokiService
+	notify *NotifyService
 }
 
 var DefaultAnalyzer *AnalyzerService
 
 func InitAnalyzer(db *gorm.DB) {
 	DefaultAnalyzer = &AnalyzerService{
-		db:   db,
-		loki: DefaultLokiService,
-		dt:   DefaultDingTalkService,
+		db:     db,
+		loki:   DefaultLokiService,
+		notify: DefaultNotifyService,
 	}
 }
 
@@ -108,10 +108,17 @@ func (a *AnalyzerService) RunAnalysis() {
 
 	// Send critical alerts immediately
 	for _, alert := range criticalAlerts {
-		if err := a.dt.SendAlert(alert.Severity, alert.Project, alert.Service, alert.CallerFile, alert.Job, alert.ErrorCount, alert.Comparison, alert.SampleContent, now); err != nil {
-			log.Printf("Send DingTalk alert error: %v", err)
-			continue
-		}
+		a.notify.SendAlert(AlertMessage{
+			Severity:      alert.Severity,
+			Project:       alert.Project,
+			Service:       alert.Service,
+			CallerFile:    alert.CallerFile,
+			Job:           alert.Job,
+			ErrorCount:    alert.ErrorCount,
+			Comparison:    alert.Comparison,
+			SampleContent: alert.SampleContent,
+			AlertTime:     now,
+		})
 		a.db.Model(&alert).Update("notified", true)
 	}
 
@@ -120,18 +127,18 @@ func (a *AnalyzerService) RunAnalysis() {
 		var batchItems []BatchWarningItem
 		for _, alert := range warningAlerts {
 			batchItems = append(batchItems, BatchWarningItem{
-				Service:    alert.Service,
-				CallerFile: alert.CallerFile,
-				ErrorCount: alert.ErrorCount,
-				Comparison: alert.Comparison,
+				Project:       alert.Project,
+				Service:       alert.Service,
+				CallerFile:    alert.CallerFile,
+				Job:           alert.Job,
+				ErrorCount:    alert.ErrorCount,
+				Comparison:    alert.Comparison,
+				SampleContent: alert.SampleContent,
 			})
 		}
-		if err := a.dt.SendBatchWarnings(batchItems, now); err != nil {
-			log.Printf("Send batch warnings error: %v", err)
-		} else {
-			for _, alert := range warningAlerts {
-				a.db.Model(&alert).Update("notified", true)
-			}
+		a.notify.SendBatchWarnings(batchItems, now)
+		for _, alert := range warningAlerts {
+			a.db.Model(&alert).Update("notified", true)
 		}
 	}
 
@@ -179,14 +186,23 @@ func (a *AnalyzerService) runSpikeDetection(now time.Time, multiplier float64, c
 		}
 
 		comparison := fmt.Sprintf("↑ %.0f%%", (ratio-1)*100)
-		sample := a.loki.GetSampleContent(project, service, "", start5m, now)
+
+		// Get a sample log entry for both content and job info
+		sampleContent := ""
+		sampleJob := ""
+		entries, _, _ := a.loki.QueryLogs(project, service, "", "", "", start5m, now, 1)
+		if len(entries) > 0 {
+			sampleContent = entries[0].Content
+			sampleJob = entries[0].Job
+		}
 
 		hist := model.AlertHistory{
 			Severity:      "warning",
 			Project:       project,
 			Service:       service,
+			Job:           sampleJob,
 			ErrorCount:    int(current5m),
-			SampleContent: sample,
+			SampleContent: sampleContent,
 			Comparison:    comparison,
 		}
 		if err := a.db.Create(&hist).Error; err == nil {

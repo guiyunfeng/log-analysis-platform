@@ -68,3 +68,13 @@ INSERT IGNORE INTO settings (`key`, value, description) VALUES
 ('warning_batch_interval', '5', 'warning聚合推送间隔（分钟）'),
 ('loki_url', '', 'Loki服务地址'),
 ('dingtalk_webhook', '', '钉钉机器人Webhook地址');
+
+CREATE TABLE IF NOT EXISTS notify_channels (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL COMMENT '渠道名称',
+    type VARCHAR(50) NOT NULL COMMENT '渠道类型: dingtalk/wecom/email/telegram/feishu',
+    config TEXT NOT NULL COMMENT 'JSON配置',
+    enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -106,7 +106,7 @@ func (s *NotifyService) buildNotifier(ch model.NotifyChannel) Notifier {
 			log.Printf("Failed to parse DingTalk config for channel %d: %v", ch.ID, err)
 			return nil
 		}
-		return NewDingTalkNotifier(cfg.Webhook)
+		return NewDingTalkNotifierWithConfig(cfg)
 	case "wecom":
 		var cfg WeComConfig
 		if err := json.Unmarshal([]byte(ch.Config), &cfg); err != nil {

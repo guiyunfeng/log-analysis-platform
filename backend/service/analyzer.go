@@ -187,16 +187,7 @@ func (a *AnalyzerService) RunAnalysis() {
 			AlertTime:     now,
 		}
 		// Use per-rule notify channels if configured
-		if alert.RuleID != nil {
-			var rule model.AlertRule
-			if err := a.db.First(&rule, *alert.RuleID).Error; err == nil && rule.NotifyChannels != "" {
-				a.notify.SendAlertToChannels(rule.NotifyChannels, msg)
-			} else {
-				a.notify.SendAlert(msg)
-			}
-		} else {
-			a.notify.SendAlert(msg)
-		}
+		a.sendAlertWithRuleRouting(alert.RuleID, msg)
 		a.db.Model(&alert).Update("notified", true)
 	}
 
@@ -221,6 +212,19 @@ func (a *AnalyzerService) RunAnalysis() {
 	}
 
 	log.Printf("Analysis done: %d critical, %d warning alerts generated", len(criticalAlerts), len(warningAlerts))
+}
+
+// sendAlertWithRuleRouting sends an alert using rule-specific channels if configured,
+// falling back to all enabled channels.
+func (a *AnalyzerService) sendAlertWithRuleRouting(ruleID *int64, msg AlertMessage) {
+	if ruleID != nil {
+		var rule model.AlertRule
+		if err := a.db.First(&rule, *ruleID).Error; err == nil && rule.NotifyChannels != "" {
+			a.notify.SendAlertToChannels(rule.NotifyChannels, msg)
+			return
+		}
+	}
+	a.notify.SendAlert(msg)
 }
 
 // checkRecovery sends a recovery notification if the rule had previous unrecovered alerts

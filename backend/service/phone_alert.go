@@ -14,12 +14,12 @@ import (
 // PhoneAlertConfig holds phone-call alert channel configuration.
 type PhoneAlertConfig struct {
 	Provider         string   `json:"provider"`           // "aliyun", "tencent", "webhook"
-	AccessKeyID      string   `json:"access_key_id"`
-	SecretKey        string   `json:"secret_key"`
+	AccessKeyID      string   `json:"access_key_id"`      // reserved for future direct SDK integration
+	SecretKey        string   `json:"secret_key"`         // reserved for future direct SDK integration
 	TemplateID       string   `json:"template_id"`
 	CalledShowNumber string   `json:"called_show_number"` // caller-id shown on phone
 	PhoneNumbers     []string `json:"phone_numbers"`      // numbers to call
-	WebhookURL       string   `json:"webhook_url"`        // for "webhook" provider
+	WebhookURL       string   `json:"webhook_url"`        // for "webhook" provider or proxy URL
 }
 
 // PhoneAlertNotifier implements the Notifier interface via phone/voice alerts.

@@ -308,6 +308,8 @@ const saveChannel = async () => {
   }
   if (form.type === 'dingtalk') {
     form.config.keywords = dingKeywordsStr.value.split(',').map(s => s.trim()).filter(Boolean)
+    // Also set legacy single keyword for backward compatibility
+    form.config.keyword = form.config.keywords[0] || ''
     form.config.at_mobiles = dingAtMobilesStr.value.split(',').map(s => s.trim()).filter(Boolean)
   }
   const payload = {

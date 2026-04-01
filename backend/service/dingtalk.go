@@ -7,16 +7,21 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
-
-	"log-analysis-platform/config"
 )
+
+// DingTalkConfig holds DingTalk channel configuration
+type DingTalkConfig struct {
+	Webhook string `json:"webhook"`
+	Keyword string `json:"keyword"`
+}
 
 // DingTalkMessage represents a DingTalk webhook message
 type DingTalkMessage struct {
-	MsgType  string              `json:"msgtype"`
-	Markdown DingTalkMarkdown    `json:"markdown"`
-	At       *DingTalkAt         `json:"at,omitempty"`
+	MsgType  string           `json:"msgtype"`
+	Markdown DingTalkMarkdown `json:"markdown"`
+	At       *DingTalkAt      `json:"at,omitempty"`
 }
 
 type DingTalkMarkdown struct {
@@ -28,57 +33,50 @@ type DingTalkAt struct {
 	AtAll bool `json:"isAtAll"`
 }
 
-// DingTalkService handles DingTalk notifications
-type DingTalkService struct {
+// DingTalkNotifier implements Notifier for DingTalk
+type DingTalkNotifier struct {
 	webhookURL string
 	client     *http.Client
 }
 
-var DefaultDingTalkService *DingTalkService
-
-func InitDingTalk() {
-	DefaultDingTalkService = &DingTalkService{
-		webhookURL: config.GlobalConfig.DingTalkWebhook,
-		client: &http.Client{
-			Timeout: 10 * time.Second,
-		},
+func NewDingTalkNotifier(webhook string) *DingTalkNotifier {
+	return &DingTalkNotifier{
+		webhookURL: webhook,
+		client:     &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
 // SendAlert sends an alert notification to DingTalk
-func (s *DingTalkService) SendAlert(severity, project, service, callerFile, job string, errorCount int, comparison, sampleContent string, alertTime time.Time) error {
-	if s.webhookURL == "" {
+func (n *DingTalkNotifier) SendAlert(alert AlertMessage) error {
+	if n.webhookURL == "" {
 		log.Println("DingTalk webhook not configured, skipping notification")
+		return nil
+	}
+	if alert.Severity == "noise" {
 		return nil
 	}
 
 	icon := "⚠️"
 	levelStr := "WARNING"
-	switch severity {
-	case "critical":
+	if alert.Severity == "critical" {
 		icon = "🔴"
 		levelStr = "CRITICAL"
-	case "warning":
-		icon = "⚠️"
-		levelStr = "WARNING"
-	case "noise":
-		return nil // Don't send noise alerts
 	}
 
 	title := fmt.Sprintf("%s [%s] 服务异常告警", icon, levelStr)
 
 	comparisonLine := ""
-	if comparison != "" {
-		comparisonLine = fmt.Sprintf("环比上一小时: %s  \n", comparison)
+	if alert.Comparison != "" {
+		comparisonLine = fmt.Sprintf("**环比:** %s  \n", alert.Comparison)
 	}
 
 	sampleLine := ""
-	if sampleContent != "" {
-		truncated := sampleContent
+	if alert.SampleContent != "" {
+		truncated := alert.SampleContent
 		if len(truncated) > 200 {
 			truncated = truncated[:200] + "..."
 		}
-		sampleLine = fmt.Sprintf("━━━━━━━━━━━━━━━━━━━━━  \n**示例报错:**  \n%s  \n", truncated)
+		sampleLine = fmt.Sprintf("**示例报错:** %s  \n", truncated)
 	}
 
 	text := fmt.Sprintf(`%s [%s] 服务异常告警  
@@ -92,11 +90,11 @@ func (s *DingTalkService) SendAlert(severity, project, service, callerFile, job 
 %s%s━━━━━━━━━━━━━━━━━━━━━  
 ⏰ %s`,
 		icon, levelStr,
-		project, service, callerFile, job,
-		errorCount,
+		alert.Project, alert.Service, alert.CallerFile, alert.Job,
+		alert.ErrorCount,
 		comparisonLine,
 		sampleLine,
-		alertTime.Format("2006-01-02 15:04:05"),
+		alert.AlertTime.Format("2006-01-02 15:04:05"),
 	)
 
 	msg := DingTalkMessage{
@@ -112,7 +110,7 @@ func (s *DingTalkService) SendAlert(severity, project, service, callerFile, job 
 		return fmt.Errorf("marshal message: %w", err)
 	}
 
-	resp, err := s.client.Post(s.webhookURL, "application/json", bytes.NewReader(body))
+	resp, err := n.client.Post(n.webhookURL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("send request: %w", err)
 	}
@@ -128,34 +126,51 @@ func (s *DingTalkService) SendAlert(severity, project, service, callerFile, job 
 	return nil
 }
 
-// SendBatchWarnings sends a batch of warnings to DingTalk
-func (s *DingTalkService) SendBatchWarnings(items []BatchWarningItem, alertTime time.Time) error {
-	if s.webhookURL == "" || len(items) == 0 {
+// SendBatchWarnings sends a batch of warnings to DingTalk with full details
+func (n *DingTalkNotifier) SendBatchWarnings(items []BatchWarningItem, alertTime time.Time) error {
+	if n.webhookURL == "" || len(items) == 0 {
 		return nil
 	}
 
 	title := "⚠️ [WARNING] 批量服务告警"
-	lines := []string{title, "━━━━━━━━━━━━━━━━━━━━━"}
+	var lines []string
+	lines = append(lines, title, "━━━━━━━━━━━━━━━━━━━━━")
 	for i, item := range items {
 		if i >= 10 {
 			lines = append(lines, fmt.Sprintf("... 共 %d 条告警", len(items)))
 			break
 		}
-		lines = append(lines, fmt.Sprintf("**%s/%s** - %d次错误 (%s)", item.Service, item.CallerFile, item.ErrorCount, item.Comparison))
+		lines = append(lines, fmt.Sprintf("🔸 **项目:** %s", item.Project))
+		lines = append(lines, fmt.Sprintf("   **服务:** %s", item.Service))
+		if item.CallerFile != "" {
+			lines = append(lines, fmt.Sprintf("   **调用点:** %s", item.CallerFile))
+		}
+		if item.Job != "" {
+			lines = append(lines, fmt.Sprintf("   **机器:** %s", item.Job))
+		}
+		lines = append(lines, fmt.Sprintf("   **过去5分钟错误:** %d 次 (%s)", item.ErrorCount, item.Comparison))
+		if item.SampleContent != "" {
+			sample := item.SampleContent
+			if len(sample) > 100 {
+				sample = sample[:100] + "..."
+			}
+			lines = append(lines, fmt.Sprintf("   **示例:** %s", sample))
+		}
+		lines = append(lines, "━━━━━━━━━━━━━━━━━━━━━")
 	}
-	lines = append(lines, "━━━━━━━━━━━━━━━━━━━━━")
 	lines = append(lines, fmt.Sprintf("⏰ %s", alertTime.Format("2006-01-02 15:04:05")))
 
-	text := ""
+	var sb strings.Builder
 	for _, l := range lines {
-		text += l + "  \n"
+		sb.WriteString(l)
+		sb.WriteString("  \n")
 	}
 
 	msg := DingTalkMessage{
 		MsgType: "markdown",
 		Markdown: DingTalkMarkdown{
 			Title: title,
-			Text:  text,
+			Text:  sb.String(),
 		},
 	}
 
@@ -164,18 +179,13 @@ func (s *DingTalkService) SendBatchWarnings(items []BatchWarningItem, alertTime 
 		return err
 	}
 
-	resp, err := s.client.Post(s.webhookURL, "application/json", bytes.NewReader(body))
+	resp, err := n.client.Post(n.webhookURL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
+	respBody, _ := io.ReadAll(resp.Body)
+	log.Printf("DingTalk batch response: %s", string(respBody))
 	return nil
-}
-
-type BatchWarningItem struct {
-	Service    string
-	CallerFile string
-	ErrorCount int
-	Comparison string
 }

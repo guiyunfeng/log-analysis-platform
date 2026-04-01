@@ -41,4 +41,12 @@ export const resolveAlertHistory = (id) => api.put(`/alert-history/${id}/resolve
 export const getSettings = () => api.get('/settings')
 export const updateSettings = (data) => api.put('/settings', data)
 
+// Notify channel APIs
+export const getNotifyChannels = () => api.get('/notify-channels')
+export const createNotifyChannel = (data) => api.post('/notify-channels', data)
+export const updateNotifyChannel = (id, data) => api.put(`/notify-channels/${id}`, data)
+export const deleteNotifyChannel = (id) => api.delete(`/notify-channels/${id}`)
+export const toggleNotifyChannel = (id) => api.put(`/notify-channels/${id}/toggle`)
+export const testNotifyChannel = (id) => api.post(`/notify-channels/${id}/test`)
+
 export default api

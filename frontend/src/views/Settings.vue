@@ -13,18 +13,6 @@
             测试连接
           </el-button>
         </el-form-item>
-        <el-form-item label="钉钉 Webhook URL">
-          <el-input
-            v-model="form.dingtalk_webhook"
-            placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxx"
-            style="width: 400px"
-            type="password"
-            show-password
-          />
-          <el-button style="margin-left: 8px" @click="testDingTalk" :loading="testingDingTalk">
-            测试推送
-          </el-button>
-        </el-form-item>
       </el-form>
 
       <el-divider />
@@ -82,11 +70,9 @@ import { getSettings, updateSettings } from '../api/index.js'
 
 const saving = ref(false)
 const testingLoki = ref(false)
-const testingDingTalk = ref(false)
 
 const form = reactive({
   loki_url: '',
-  dingtalk_webhook: '',
   spike_multiplier: 10,
   global_threshold: 100,
   global_time_window: 300,
@@ -99,7 +85,6 @@ const loadSettings = async () => {
     const res = await getSettings()
     const data = res?.data || {}
     if (data.loki_url) form.loki_url = data.loki_url
-    if (data.dingtalk_webhook) form.dingtalk_webhook = data.dingtalk_webhook
     if (data.spike_multiplier) form.spike_multiplier = Number(data.spike_multiplier)
     if (data.global_threshold) form.global_threshold = Number(data.global_threshold)
     if (data.global_time_window) form.global_time_window = Number(data.global_time_window)
@@ -115,7 +100,6 @@ const saveSettings = async () => {
   try {
     const payload = {
       loki_url: form.loki_url,
-      dingtalk_webhook: form.dingtalk_webhook,
       spike_multiplier: String(form.spike_multiplier),
       global_threshold: String(form.global_threshold),
       global_time_window: String(form.global_time_window),
@@ -146,20 +130,6 @@ const testLoki = async () => {
     ElMessage.error(`Loki 连接失败: ${e.message}`)
   } finally {
     testingLoki.value = false
-  }
-}
-
-const testDingTalk = async () => {
-  if (!form.dingtalk_webhook) {
-    ElMessage.warning('请先填写钉钉 Webhook')
-    return
-  }
-  testingDingTalk.value = true
-  try {
-    await updateSettings({ dingtalk_webhook: form.dingtalk_webhook })
-    ElMessage.success('测试消息已发送，请检查钉钉群')
-  } finally {
-    testingDingTalk.value = false
   }
 }
 

@@ -38,6 +38,12 @@ const routes = [
         meta: { title: '告警历史' }
       },
       {
+        path: '/notify-channels',
+        name: 'NotifyChannels',
+        component: () => import('../views/NotifyChannels.vue'),
+        meta: { title: '通知渠道' }
+      },
+      {
         path: '/settings',
         name: 'Settings',
         component: () => import('../views/Settings.vue'),

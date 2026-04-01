@@ -106,7 +106,7 @@ func (s *NotifyService) buildNotifier(ch model.NotifyChannel) Notifier {
 			log.Printf("Failed to parse DingTalk config for channel %d: %v", ch.ID, err)
 			return nil
 		}
-		return NewDingTalkNotifier(cfg.Webhook)
+		return NewDingTalkNotifierWithConfig(cfg)
 	case "wecom":
 		var cfg WeComConfig
 		if err := json.Unmarshal([]byte(ch.Config), &cfg); err != nil {
@@ -135,6 +135,13 @@ func (s *NotifyService) buildNotifier(ch model.NotifyChannel) Notifier {
 			return nil
 		}
 		return NewFeishuNotifier(cfg.Webhook)
+	case "phone":
+		var cfg PhoneAlertConfig
+		if err := json.Unmarshal([]byte(ch.Config), &cfg); err != nil {
+			log.Printf("Failed to parse Phone config for channel %d: %v", ch.ID, err)
+			return nil
+		}
+		return NewPhoneAlertNotifier(cfg)
 	}
 	return nil
 }
@@ -188,6 +195,59 @@ func (s *NotifyService) TestChannel(ch model.NotifyChannel) error {
 		AlertTime:     time.Now(),
 	}
 	return notifier.SendAlert(alert)
+}
+
+// SendAlertToChannels dispatches an alert to the specified channel IDs (comma-separated).
+// If channelIDs is empty, it falls back to sending to all enabled channels.
+func (s *NotifyService) SendAlertToChannels(channelIDs string, alert AlertMessage) {
+	if channelIDs == "" {
+		s.SendAlert(alert)
+		return
+	}
+	var ids []uint
+	for _, part := range strings.Split(channelIDs, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		var id uint
+		if _, err := fmt.Sscanf(part, "%d", &id); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		s.SendAlert(alert)
+		return
+	}
+	var channels []model.NotifyChannel
+	s.db.Where("id IN ? AND enabled = ?", ids, true).Find(&channels)
+	for _, ch := range channels {
+		notifier := s.buildNotifier(ch)
+		if notifier == nil {
+			continue
+		}
+		if err := notifier.SendAlert(alert); err != nil {
+			log.Printf("Send alert via %s channel %d error: %v", ch.Type, ch.ID, err)
+		}
+	}
+}
+
+// SendRecovery sends a recovery notification to all enabled channels.
+func (s *NotifyService) SendRecovery(alert AlertMessage) {
+	channels := s.loadChannels()
+	for _, ch := range channels {
+		notifier := s.buildNotifier(ch)
+		if notifier == nil {
+			continue
+		}
+		// Build a recovery-flavoured alert message
+		recovery := alert
+		recovery.Severity = "warning"
+		recovery.SampleContent = fmt.Sprintf("✅ 服务 %s / %s 告警已恢复", alert.Service, alert.Project)
+		if err := notifier.SendAlert(recovery); err != nil {
+			log.Printf("Send recovery via %s channel %d error: %v", ch.Type, ch.ID, err)
+		}
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

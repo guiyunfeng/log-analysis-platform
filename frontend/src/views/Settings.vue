@@ -17,6 +17,30 @@
 
       <el-divider />
 
+      <div class="section-title">钉钉安全配置</div>
+      <el-form :model="form" label-width="160px" size="default">
+        <el-form-item label="全局钉钉加签密钥">
+          <el-input
+            v-model="form.dingtalk_secret"
+            type="password"
+            show-password
+            placeholder="SEC开头的加签密钥（可留空）"
+            style="width: 400px"
+          />
+          <span class="hint">用于在全局 DingTalk 渠道中开启 HMAC-SHA256 加签安全模式</span>
+        </el-form-item>
+        <el-form-item label="全局钉钉关键词">
+          <el-input
+            v-model="form.dingtalk_keywords"
+            placeholder="告警,故障,异常（多个逗号分隔）"
+            style="width: 400px"
+          />
+          <span class="hint">多个关键词，消息中至少包含其一才能通过关键词安全验证</span>
+        </el-form-item>
+      </el-form>
+
+      <el-divider />
+
       <div class="section-title">告警全局配置</div>
       <el-form :model="form" label-width="160px" size="default">
         <el-form-item label="突增倍数阈值">
@@ -73,6 +97,8 @@ const testingLoki = ref(false)
 
 const form = reactive({
   loki_url: '',
+  dingtalk_secret: '',
+  dingtalk_keywords: '',
   spike_multiplier: 10,
   global_threshold: 100,
   global_time_window: 300,
@@ -85,6 +111,8 @@ const loadSettings = async () => {
     const res = await getSettings()
     const data = res?.data || {}
     if (data.loki_url) form.loki_url = data.loki_url
+    if (data.dingtalk_secret !== undefined) form.dingtalk_secret = data.dingtalk_secret
+    if (data.dingtalk_keywords !== undefined) form.dingtalk_keywords = data.dingtalk_keywords
     if (data.spike_multiplier) form.spike_multiplier = Number(data.spike_multiplier)
     if (data.global_threshold) form.global_threshold = Number(data.global_threshold)
     if (data.global_time_window) form.global_time_window = Number(data.global_time_window)
@@ -100,6 +128,8 @@ const saveSettings = async () => {
   try {
     const payload = {
       loki_url: form.loki_url,
+      dingtalk_secret: form.dingtalk_secret,
+      dingtalk_keywords: form.dingtalk_keywords,
       spike_multiplier: String(form.spike_multiplier),
       global_threshold: String(form.global_threshold),
       global_time_window: String(form.global_time_window),

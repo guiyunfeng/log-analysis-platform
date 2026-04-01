@@ -26,6 +26,8 @@ func GetSettings(c *gin.Context) {
 	// Also return connection info
 	result["loki_url"] = config.GlobalConfig.LokiURL
 	result["dingtalk_webhook"] = config.GlobalConfig.DingTalkWebhook
+	result["dingtalk_secret"] = config.GlobalConfig.DingTalkSecret
+	result["dingtalk_keywords"] = config.GlobalConfig.DingTalkKeywords
 
 	c.JSON(http.StatusOK, gin.H{"data": result})
 }
@@ -44,13 +46,17 @@ func UpdateSettings(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		// Update Loki URL dynamically if changed
-		if key == "loki_url" {
+		// Update runtime config values dynamically
+		switch key {
+		case "loki_url":
 			config.GlobalConfig.LokiURL = value
 			service.DefaultLokiService = service.NewLokiService(value)
-		}
-		if key == "dingtalk_webhook" {
+		case "dingtalk_webhook":
 			config.GlobalConfig.DingTalkWebhook = value
+		case "dingtalk_secret":
+			config.GlobalConfig.DingTalkSecret = value
+		case "dingtalk_keywords":
+			config.GlobalConfig.DingTalkKeywords = value
 		}
 	}
 
